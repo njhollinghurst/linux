@@ -788,6 +788,24 @@
 				       "gpio26", "gpio27";
 				bias-disable;
 			};
+			rp1_dpi_18bit_extra_gpio2: rp1_dpi_18bit_extra_gpio2 {
+				/*
+				 * ===== NONSTANDARD ADDITIONAL FORMAT  ====
+				 * RGB666 pinout which resembles "mode 6" but moves R high:
+				 *   R: GPIOs 27:22 (gap 21:18)
+				 *   G: GPIOs 17:12 (gap 11:10)
+				 *   B: GPIOs  9: 4
+				 * There are NO plans to merge this into a released kernel.
+				 */
+				function = "dpi";
+				pins = "gpio2", "gpio3", "gpio4", "gpio5",
+				       "gpio6", "gpio7", "gpio8", "gpio9",
+				       "gpio12", "gpio13", "gpio14", "gpio15",
+				       "gpio16", "gpio17",
+				       "gpio22", "gpio23", "gpio24", "gpio25",
+				       "gpio26", "gpio27";
+				bias-disable;
+			};
 			rp1_dpi_hvsync: rp1_dpi_hvsync { /* Sync only, for use with int VDAC */
 				function = "dpi";
 				pins = "gpio2", "gpio3";
@@ -856,6 +874,25 @@
 				       "gpio16", "gpio17", "gpio18", "gpio19",
 				       "gpio20", "gpio21", "gpio22", "gpio23",
 				       "gpio24", "gpio25", "gpio26", "gpio27";
+				bias-disable;
+			};
+			rp1_dpi_18bit_extra_gpio0: rp1_dpi_18bit_extra_gpio0 {
+				/*
+				 * ===== NONSTANDARD ADDITIONAL FORMAT  ====
+				 * RGB666 pinout which resembles "mode 6" but moves R high:
+				 *   R: GPIOs 27:22 (gap 21:18)
+				 *   G: GPIOs 17:12 (gap 11:10)
+				 *   B: GPIOs  9: 4
+				 * There are NO plans to merge this into a released kernel.
+				 */
+				function = "dpi";
+				pins = "gpio0", "gpio1", "gpio2", "gpio3",
+				       "gpio4", "gpio5", "gpio6", "gpio7",
+				       "gpio8", "gpio9",
+				       "gpio12", "gpio13", "gpio14", "gpio15",
+				       "gpio16", "gpio17",
+				       "gpio22", "gpio23", "gpio24", "gpio25",
+				       "gpio26", "gpio27";
 				bias-disable;
 			};
 

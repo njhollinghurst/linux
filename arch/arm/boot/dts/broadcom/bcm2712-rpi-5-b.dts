@@ -278,6 +278,10 @@ dpi_16bit_cpadhi_gpio2: &rp1_dpi_16bit_cpadhi_gpio2 { };
 dpi_16bit_gpio0:        &rp1_dpi_16bit_gpio0        { };
 dpi_16bit_gpio2:        &rp1_dpi_16bit_gpio2        { };
 
+// These two are NON-STANDARD and not supported by other Raspberry Pis
+dpi_18bit_extra_gpio0:  &rp1_dpi_18bit_extra_gpio0  { };
+dpi_18bit_extra_gpio2:  &rp1_dpi_18bit_extra_gpio2  { };
+
 /* Add the IOMMUs for some RP1 bus masters */
 
 &csi0 {

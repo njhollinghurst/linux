@@ -325,9 +325,25 @@ static u32 set_output_format(u32 bus_format, u32 *shift, u32 *imask, u32 *rgbsz)
 		*rgbsz &= DPI_DMA_RGBSZ_BPP_MASK;
 		return OMASK_RGB(0x3e0, 0x3f0, 0x3e0);
 
-	default:
-		/* RGB666_1x24_CPADHI, BGR666_1X24_CPADHI and "mode 4" formats */
+	case MEDIA_BUS_FMT_RGB666_1X24_CPADHI:
+	case MEDIA_BUS_FMT_BGR666_1X24_CPADHI:
+		/* "Mode 6" and (with modified pinctrl) "mode 4" */
 		*shift |= OSHIFT_RGB(27, 17, 7);
+		*rgbsz &= DPI_DMA_RGBSZ_BPP_MASK;
+		return OMASK_RGB(0x3f0, 0x3f0, 0x3f0);
+
+	default:
+		/*
+		 * ===== NONSTANDARD ADDITIONAL FORMAT  ====
+		 * RGB666 pinout which resembles "mode 6" but moves R high:
+		 *   R: GPIOs 27:22 (gap 21:18)
+		 *   G: GPIOs 17:12 (gap 11:10)
+		 *   B: GPIOs  9: 4
+		 * To test this, set *any* unsupported media bus format.
+		 * An appropriate pinctrl mapping must also be defined.
+		 * There are NO plans to merge this into a released kernel.
+		 */
+		*shift |= OSHIFT_RGB(29, 17, 7);
 		*rgbsz &= DPI_DMA_RGBSZ_BPP_MASK;
 		return OMASK_RGB(0x3f0, 0x3f0, 0x3f0);
 	}
