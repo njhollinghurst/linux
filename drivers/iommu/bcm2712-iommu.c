@@ -328,6 +328,9 @@ static void bcm2712_iommu_sync_range(struct iommu_domain *domain,
 	if (!mmu || !mmu->dirty)
 		return;
 
+	dev_info(mmu->dev, "IOMMU: 4K pages mapped: %6u out of %6u\n",
+		mmu->nmapped_pages, (unsigned)TRANSLATED_PAGES);
+
 	/* Ensure tables are cleaned from CPU cache or write-buffer */
 	dma_sync_sgtable_for_device(mmu->dev, mmu->sgt, DMA_TO_DEVICE);
 	mmu->dirty = false;
