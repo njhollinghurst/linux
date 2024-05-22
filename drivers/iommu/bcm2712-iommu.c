@@ -86,12 +86,13 @@
  * Unlike many larger MMUs, this one uses a 4-byte word size, allowing
  * 1024 entries within each 4K table page, and two-level translation.
  *
- * Let's allocate enough table space for 2GB of translated memory (IOVA).
- * This requires 512 4K pages (2MB) of level-2 tables, one page of
- * top-level table (only half-filled in this particular configuration),
- * plus one "default" page to catch illegal requests.
+ * Support a 4GB range of translated addresses (IOVA), the maximum that
+ * allows the top-level table to fit in a 4K Linux page (avoiding CMA).
+ * We also allocate one extra "default" page to catch unmapped requests.
+ * The Level 2 tables will be allocated on demand, in 16 "segments" of
+ * 256kB, where each segment holds tables to map 256MB of IOVA.
  *
- * The translated virtual address region is between 40GB and 42GB;
+ * The translated virtual address region is between 40GB and 44GB;
  * addresses below this range pass straight through to the SDRAM.
  *
  * Currently we assume a 1:1:1 correspondence of IOMMU, group and domain.
@@ -104,16 +105,71 @@
 #define HUGEPAGE_SHIFT    (MMU_PAGE_SHIFT + PAGEWORDS_SHIFT)
 #define L1_CHUNK_SHIFT    (MMU_PAGE_SHIFT + 2 * PAGEWORDS_SHIFT)
 
-#define APERTURE_BASE     (40ul << 30)
-#define APERTURE_SIZE     (2ul << 30)
-#define APERTURE_TOP      (APERTURE_BASE + APERTURE_SIZE)
-#define TRANSLATED_PAGES  (APERTURE_SIZE >> MMU_PAGE_SHIFT)
-#define L2_PAGES          (TRANSLATED_PAGES >> PAGEWORDS_SHIFT)
-#define TABLES_ALLOC_SIZE (L2_PAGES * MMU_PAGE_SIZE + 2 * PAGE_SIZE)
+#define APERTURE_BASE        (40ul << 30)
+#define APERTURE_SIZE        (4ul << 30)
+#define APERTURE_TOP         (APERTURE_BASE + APERTURE_SIZE)
+#define TRANSLATED_PAGES     (APERTURE_SIZE >> MMU_PAGE_SHIFT)
+#define PAGES_PER_SEGMENT    (TRANSLATED_PAGES / BCM2712_IOMMU_SEGMENTS)
+#define L2_PAGES             (TRANSLATED_PAGES >> PAGEWORDS_SHIFT)
+#define L2_PAGES_PER_SEGMENT (L2_PAGES / BCM2712_IOMMU_SEGMENTS)
+#define SEGMENT_ALLOC_SIZE   (L2_PAGES_PER_SEGMENT * MMU_PAGE_SIZE)
+
+static int bcm2712_iommu_init_segment(struct bcm2712_iommu *mmu,
+				      unsigned int seg)
+{
+	struct sg_dma_page_iter it;
+	unsigned int i;
+	u32 u;
+
+	dev_info(mmu->dev, "IOMMU Init segment %u\n", seg);
+
+	mmu->l2_sgts[seg] = dma_alloc_noncontiguous(mmu->dev,
+						    SEGMENT_ALLOC_SIZE,
+						    DMA_TO_DEVICE, GFP_KERNEL,
+						    DMA_ATTR_ALLOC_SINGLE_PAGES);
+	if (!mmu->l2_sgts[seg])
+		return -ENOMEM;
+
+	mmu->l2_tables[seg] = dma_vmap_noncontiguous(mmu->dev,
+						     SEGMENT_ALLOC_SIZE,
+						     mmu->l2_sgts[seg]);
+	if (!mmu->l2_tables[seg]) {
+		dma_free_noncontiguous(mmu->dev,
+				       SEGMENT_ALLOC_SIZE,
+				       mmu->l2_sgts[i], DMA_TO_DEVICE);
+		mmu->l2_sgts[i] = NULL;
+		return -ENOMEM;
+	}
+
+	/* Zero the new L2 tables; this marks all pages as invalid */
+	dma_sync_sgtable_for_cpu(mmu->dev, mmu->l2_sgts[seg], DMA_TO_DEVICE);
+	memset(mmu->l2_tables[seg], 0, SEGMENT_ALLOC_SIZE);
+	mmu->l2_dirty[seg] = 1;
+
+	/* Initialize the high-level table to point to the low-level pages */
+	if (!mmu->l1_dirty) {
+		dma_sync_sgtable_for_cpu(mmu->dev, mmu->l1_default_sgt, DMA_TO_DEVICE);
+		mmu->l1_dirty = true;
+	}
+	__sg_page_iter_start(&it.base,
+			     mmu->l2_sgts[seg]->sgl,
+			     mmu->l2_sgts[seg]->nents, 0);
+	for (i = 0; i < L2_PAGES_PER_SEGMENT; i++) {
+		if (!(i % (PAGE_SIZE / MMU_PAGE_SIZE))) {
+			__sg_page_iter_dma_next(&it);
+			u = (sg_page_iter_dma_address(&it) >> MMU_PAGE_SHIFT);
+		} else {
+			u++;
+		}
+		mmu->l1_table[L2_PAGES_PER_SEGMENT * seg + i] = MMMU_PTE_VALID + u;
+	}
+
+	return 0;
+}
 
 static void bcm2712_iommu_init(struct bcm2712_iommu *mmu)
 {
-	unsigned int i, bypass_shift;
+	unsigned int bypass_shift;
 	struct sg_dma_page_iter it;
 	u32 u = MMU_RD(MMMU_DEBUG_INFO_OFFSET);
 
@@ -169,36 +225,26 @@ static void bcm2712_iommu_init(struct bcm2712_iommu *mmu)
 		MMU_WR(MMMU_BYPASS_END_OFFSET, 0);
 	}
 
-	/* Ensure tables are zeroed (which marks all pages as invalid) */
-	dma_sync_sgtable_for_cpu(mmu->dev, mmu->sgt, DMA_TO_DEVICE);
-	memset(mmu->tables, 0, TABLES_ALLOC_SIZE);
-	mmu->nmapped_pages = 0;
-
-	/* Initialize the high-level table to point to the low-level pages */
-	__sg_page_iter_start(&it.base, mmu->sgt->sgl, mmu->sgt->nents, 0);
-	for (i = 0; i < L2_PAGES; i++) {
-		if (!(i % (PAGE_SIZE / MMU_PAGE_SIZE))) {
-			__sg_page_iter_dma_next(&it);
-			u = (sg_page_iter_dma_address(&it) >> MMU_PAGE_SHIFT);
-		} else {
-			u++;
-		}
-		mmu->tables[TRANSLATED_PAGES + i] = MMMU_PTE_VALID + u;
-	}
+	/* Ensure L1 table is zeroed (which marks all hugepages as invalid) */
+	dma_sync_sgtable_for_cpu(mmu->dev, mmu->l1_default_sgt, DMA_TO_DEVICE);
+	memset(mmu->l1_table, 0, 2 * PAGE_SIZE);
 
 	/*
 	 * Configure the addresses of the top-level table (offset because
 	 * the aperture does not start from zero), and of the default page.
 	 * For simplicity, both these regions are whole Linux pages.
 	 */
+	__sg_page_iter_start(&it.base,
+			     mmu->l1_default_sgt->sgl,
+			     mmu->l1_default_sgt->nents, 0);
 	__sg_page_iter_dma_next(&it);
 	u = (sg_page_iter_dma_address(&it) >> MMU_PAGE_SHIFT);
 	MMU_WR(MMMU_PT_PA_BASE_OFFSET, u - (APERTURE_BASE >> L1_CHUNK_SHIFT));
 	__sg_page_iter_dma_next(&it);
 	u = (sg_page_iter_dma_address(&it) >> MMU_PAGE_SHIFT);
 	MMU_WR(MMMU_ILLEGAL_ADR_OFFSET, MMMU_ILLEGAL_ADR_ENABLE + u);
-	dma_sync_sgtable_for_device(mmu->dev, mmu->sgt, DMA_TO_DEVICE);
-	mmu->dirty = false;
+	dma_sync_sgtable_for_device(mmu->dev, mmu->l1_default_sgt, DMA_TO_DEVICE);
+	mmu->l1_dirty = false;
 
 	/* Flush (and enable) the shared TLB cache; enable this MMU. */
 	if (mmu->cache)
@@ -258,17 +304,21 @@ static int bcm2712_iommu_map(struct iommu_domain *domain, unsigned long iova,
 		if (prot & IOMMU_WRITE)
 			entry |= MMMU_PTE_WRITEABLE;
 
-		/* Ensure tables are cache-coherent with CPU */
-		if (!mmu->dirty) {
-			dma_sync_sgtable_for_cpu(mmu->dev, mmu->sgt, DMA_TO_DEVICE);
-			mmu->dirty = true;
-		}
-
 		iova -= APERTURE_BASE;
 		for (p = iova >> MMU_PAGE_SHIFT;
 		     p < (iova + bytes) >> MMU_PAGE_SHIFT; p++) {
-			mmu->nmapped_pages += !(mmu->tables[p]);
-			mmu->tables[p] = entry++;
+			unsigned int seg = p / PAGES_PER_SEGMENT;
+
+			if (!mmu->l2_tables[seg]) {
+				if (bcm2712_iommu_init_segment(mmu, seg))
+					return -ENOMEM;
+			} else if (!mmu->l2_dirty[seg]) {
+				dma_sync_sgtable_for_cpu(mmu->dev,
+							 mmu->l2_sgts[seg], DMA_TO_DEVICE);
+				mmu->l2_dirty[seg] = true;
+			}
+			mmu->nmapped_pages += !(mmu->l2_tables[seg][p % PAGES_PER_SEGMENT]);
+			mmu->l2_tables[seg][p % PAGES_PER_SEGMENT] = entry++;
 		}
 	} else if (iova + bytes > APERTURE_BASE || iova != pa) {
 		dev_warn(mmu->dev, "%s: iova=0x%lx pa=0x%llx size=0x%llx OUT OF RANGE!\n",
@@ -299,19 +349,22 @@ static size_t bcm2712_iommu_unmap(struct iommu_domain *domain, unsigned long iov
 				gather->end = iova + bytes;
 		}
 
-		/* Ensure tables are cache-coherent with CPU */
-		if (!mmu->dirty) {
-			dma_sync_sgtable_for_cpu(mmu->dev, mmu->sgt, DMA_TO_DEVICE);
-			mmu->dirty = true;
-		}
-
 		/* Clear table entries, this marks the addresses as illegal */
 		iova -= (mmu->dma_iova_offset + APERTURE_BASE);
 		for (p = iova >> MMU_PAGE_SHIFT;
 		     p < (iova + bytes) >> MMU_PAGE_SHIFT;
 		     p++) {
-			mmu->nmapped_pages -= !!(mmu->tables[p]);
-			mmu->tables[p] = 0;
+			unsigned int seg = p / PAGES_PER_SEGMENT;
+
+			if (!mmu->l2_tables[seg])
+				continue;
+			if (!mmu->l2_dirty[seg]) {
+				dma_sync_sgtable_for_cpu(mmu->dev,
+							 mmu->l2_sgts[seg], DMA_TO_DEVICE);
+				mmu->l2_dirty[seg] = true;
+			}
+			mmu->nmapped_pages -= !!(mmu->l2_tables[seg][p % PAGES_PER_SEGMENT]);
+			mmu->l2_tables[seg][p % PAGES_PER_SEGMENT] = 0;
 		}
 	}
 
@@ -324,16 +377,29 @@ static void bcm2712_iommu_sync_range(struct iommu_domain *domain,
 	struct bcm2712_iommu *mmu = domain_to_mmu(domain);
 	unsigned long iova_end;
 	unsigned int i, p4;
+	bool any_dirty;
 
-	if (!mmu || !mmu->dirty)
+	if (!mmu)
+		return;
+
+	any_dirty = mmu->l1_dirty;
+	for (i = 0; i < BCM2712_IOMMU_SEGMENTS; ++i) {
+		if (mmu->l2_dirty[i]) {
+			any_dirty = true;
+			dma_sync_sgtable_for_device(mmu->dev, mmu->l2_sgts[i], DMA_TO_DEVICE);
+			mmu->l2_dirty[i] = 0;
+		}
+	}
+	if (!any_dirty)
 		return;
 
 	dev_info(mmu->dev, "IOMMU: 4K pages mapped: %6u out of %6u\n",
-		mmu->nmapped_pages, (unsigned)TRANSLATED_PAGES);
+		 mmu->nmapped_pages, (unsigned int)TRANSLATED_PAGES);
 
-	/* Ensure tables are cleaned from CPU cache or write-buffer */
-	dma_sync_sgtable_for_device(mmu->dev, mmu->sgt, DMA_TO_DEVICE);
-	mmu->dirty = false;
+	if (mmu->l1_dirty) {
+		dma_sync_sgtable_for_device(mmu->dev, mmu->l1_default_sgt, DMA_TO_DEVICE);
+		mmu->l1_dirty = false;
+	}
 
 	/* Flush the shared TLB cache */
 	if (mmu->cache)
@@ -396,7 +462,7 @@ static phys_addr_t bcm2712_iommu_iova_to_phys(struct iommu_domain *domain, dma_a
 	iova -= mmu->dma_iova_offset;
 	if (iova  >= APERTURE_BASE && iova < APERTURE_TOP) {
 		p = (iova - APERTURE_BASE) >> MMU_PAGE_SHIFT;
-		p = mmu->tables[p] & 0x0FFFFFFFu;
+		p = mmu->l2_tables[p / PAGES_PER_SEGMENT][p % PAGES_PER_SEGMENT] & 0x0FFFFFFFu;
 		return (((phys_addr_t)p) << MMU_PAGE_SHIFT) + (iova & (MMU_PAGE_SIZE - 1u));
 	} else if (iova < APERTURE_BASE) {
 		return (phys_addr_t)iova;
@@ -527,6 +593,38 @@ static const struct iommu_ops bcm2712_iommu_ops = {
 	.of_xlate = bcm2712_iommu_of_xlate,
 };
 
+static int bcm2712_iommu_remove(struct platform_device *pdev)
+{
+	int i;
+	struct bcm2712_iommu *mmu = platform_get_drvdata(pdev);
+
+	if (mmu->reg_base)
+		MMU_WR(MMMU_CTRL_OFFSET, 0); /* disable the MMU */
+
+	for (i = BCM2712_IOMMU_SEGMENTS - 1; i >= 0; --i) {
+		if (mmu->l2_tables[i])
+			dma_vunmap_noncontiguous(&pdev->dev,
+						 (void *)(mmu->l2_tables[i]));
+		mmu->l2_tables[i] = NULL;
+		if (mmu->l2_sgts[i])
+			dma_free_noncontiguous(&pdev->dev, 2 * PAGE_SIZE,
+					       mmu->l2_sgts[i], DMA_TO_DEVICE);
+		mmu->l2_sgts[i] = NULL;
+	}
+	if (mmu->l1_table) {
+		dma_vunmap_noncontiguous(&pdev->dev,
+					 (void *)(mmu->l1_table));
+		mmu->l1_table = NULL;
+	}
+	if (mmu->l1_default_sgt) {
+		dma_free_noncontiguous(&pdev->dev, 2 * PAGE_SIZE,
+				       mmu->l1_default_sgt, DMA_TO_DEVICE);
+		mmu->l1_default_sgt = NULL;
+	}
+
+	return 0;
+}
+
 static int bcm2712_iommu_probe(struct platform_device *pdev)
 {
 	struct bcm2712_iommu *mmu;
@@ -580,16 +678,16 @@ static int bcm2712_iommu_probe(struct platform_device *pdev)
 	 */
 	ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(36));
 	WARN_ON(ret);
-	mmu->sgt = dma_alloc_noncontiguous(&pdev->dev, TABLES_ALLOC_SIZE,
-					   DMA_TO_DEVICE, GFP_KERNEL,
-					   DMA_ATTR_ALLOC_SINGLE_PAGES);
-	if (!mmu->sgt) {
+	mmu->l1_default_sgt = dma_alloc_noncontiguous(&pdev->dev, 2 * PAGE_SIZE,
+						      DMA_TO_DEVICE, GFP_KERNEL,
+						      DMA_ATTR_ALLOC_SINGLE_PAGES);
+	if (!mmu->l1_default_sgt) {
 		ret = -ENOMEM;
 		goto done_err;
 	}
-	mmu->tables = dma_vmap_noncontiguous(&pdev->dev, TABLES_ALLOC_SIZE,
-					     mmu->sgt);
-	if (!mmu->tables) {
+	mmu->l1_table = dma_vmap_noncontiguous(&pdev->dev, 2 * PAGE_SIZE,
+					       mmu->l1_default_sgt);
+	if (!mmu->l1_table) {
 		ret = -ENOMEM;
 		goto done_err;
 	}
@@ -624,29 +722,9 @@ done_err:
 	dev_info(&pdev->dev, "%s: Failure %d\n", __func__, ret);
 	if (mmu->group)
 		iommu_group_put(mmu->group);
-	if (mmu->tables)
-		dma_vunmap_noncontiguous(&pdev->dev,
-					 (void *)(mmu->tables));
-	mmu->tables = NULL;
-	if (mmu->sgt)
-		dma_free_noncontiguous(&pdev->dev, TABLES_ALLOC_SIZE,
-				       mmu->sgt, DMA_TO_DEVICE);
-	mmu->sgt = NULL;
+	bcm2712_iommu_remove(pdev);
 	kfree(mmu);
 	return ret;
-}
-
-static int bcm2712_iommu_remove(struct platform_device *pdev)
-{
-	struct bcm2712_iommu *mmu = platform_get_drvdata(pdev);
-
-	if (mmu->reg_base)
-		MMU_WR(MMMU_CTRL_OFFSET, 0); /* disable the MMU */
-	if (mmu->sgt)
-		dma_free_noncontiguous(&pdev->dev, TABLES_ALLOC_SIZE,
-				       mmu->sgt, DMA_TO_DEVICE);
-
-	return 0;
 }
 
 static const struct of_device_id bcm2712_iommu_of_match[] = {
