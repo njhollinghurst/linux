@@ -83,6 +83,18 @@ static void rp1dpi_pipe_update(struct drm_simple_display_pipe *pipe,
 				dpi->dpi_running = false;
 			}
 			if (!dpi->dpi_running) {
+
+				/*
+				 * HACK: Our "simple" DRM pipeline doesn't appear to support interlace(?)
+				 * and panel timings don't even have a flag for CSync. So just infer these
+				 * flags whenever the line rate is ~15kHz and line count is 525 or 625.
+				 */
+				if (pipe->crtc.state->mode.clock > 15 * pipe->crtc.state->mode.htotal &&
+				    pipe->crtc.state->mode.clock < 16 * pipe->crtc.state->mode.htotal &&
+				    (pipe->crtc.state->mode.vtotal == 525 || pipe->crtc.state->mode.vtotal == 625)) {
+					pipe->crtc.state->mode.flags |=
+						DRM_MODE_FLAG_INTERLACE | DRM_MODE_FLAG_CSYNC | DRM_MODE_FLAG_NCSYNC;
+				}
 				rp1dpi_hw_setup(dpi,
 						fb->format->format,
 						dpi->bus_fmt,
@@ -284,6 +296,7 @@ static int rp1dpi_platform_probe(struct platform_device *pdev)
 	}
 	if (panel) {
 		bridge = devm_drm_panel_bridge_add(dev, panel);
+		//bridge->interlace_allowed = true; // XXX seems ineffective?
 		if (IS_ERR(bridge))
 			return PTR_ERR(bridge);
 	}
@@ -295,6 +308,7 @@ static int rp1dpi_platform_probe(struct platform_device *pdev)
 		return ret;
 	}
 	dpi->pdev = pdev;
+	spin_lock_init(&dpi->hw_lock);
 
 	dpi->bus_fmt = default_bus_fmt;
 	ret = of_property_read_u32(dev->of_node, "default_bus_fmt", &dpi->bus_fmt);

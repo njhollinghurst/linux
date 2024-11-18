@@ -46,6 +46,14 @@ struct rp1_dpi {
 	bool de_inv, clk_inv;
 	bool dpi_running, pipe_enabled;
 	struct completion finished;
+
+	/* Experimental stuff for interlace */
+	struct spinlock hw_lock;
+	dma_addr_t last_dma_addr;
+	u32 last_stride;
+	u32 shorter_front_porch;
+	bool interlaced;
+	bool lower_field_flag;
 };
 
 /* ---------------------------------------------------------------------- */
