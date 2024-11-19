@@ -85,16 +85,14 @@ static void rp1dpi_pipe_update(struct drm_simple_display_pipe *pipe,
 			if (!dpi->dpi_running) {
 
 				/*
-				 * HACK: Our "simple" DRM pipeline doesn't appear to support interlace(?)
-				 * and panel timings don't even have a flag for CSync. So just infer these
-				 * flags whenever the line rate is ~15kHz and line count is 525 or 625.
+				 * HACK: Panel timings don't have a CSync flag, and RP1 DPI can't
+				 * generate CSync. But we're currently re-using DRM_MODE_FLAG_CSYNC
+				 * to indicate that HSync may be modified, to assist PIO with CSync
+				 * generation (which is currently required for interlace!)
 				 */
-				if (pipe->crtc.state->mode.clock > 15 * pipe->crtc.state->mode.htotal &&
-				    pipe->crtc.state->mode.clock < 16 * pipe->crtc.state->mode.htotal &&
-				    (pipe->crtc.state->mode.vtotal == 525 || pipe->crtc.state->mode.vtotal == 625)) {
-					pipe->crtc.state->mode.flags |=
-						DRM_MODE_FLAG_INTERLACE | DRM_MODE_FLAG_CSYNC | DRM_MODE_FLAG_NCSYNC;
-				}
+				if (pipe->crtc.state->mode.flags & DRM_MODE_FLAG_INTERLACE)
+					pipe->crtc.state->mode.flags |= DRM_MODE_FLAG_CSYNC;
+
 				rp1dpi_hw_setup(dpi,
 						fb->format->format,
 						dpi->bus_fmt,
