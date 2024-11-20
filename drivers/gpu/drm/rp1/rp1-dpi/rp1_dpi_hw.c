@@ -373,10 +373,12 @@ void rp1dpi_hw_setup(struct rp1_dpi *dpi,
 	u32 shift, imask, omask, rgbsz, ctrls;
 	int i;
 
-	pr_info("%s: in_fmt=\'%c%c%c%c\' bus_fmt=0x%x mode=%dx%d total=%dx%d %dkHz %cH%cV%cD%cC",
-		__func__, in_format, in_format >> 8, in_format >> 16, in_format >> 24, bus_format,
+	drm_info(&dpi->drm,
+		"in_fmt=\'%c%c%c%c\' bus_fmt=0x%x mode=%dx%d total=%dx%d%s %dkHz %cH%cV%cD%cC",
+		in_format, in_format >> 8, in_format >> 16, in_format >> 24, bus_format,
 		mode->hdisplay, mode->vdisplay,
 		mode->htotal, mode->vtotal,
+		(mode->flags & DRM_MODE_FLAG_INTERLACE) ? "i" : "",
 		mode->clock,
 		(mode->flags & DRM_MODE_FLAG_NHSYNC) ? '-' : '+',
 		(mode->flags & DRM_MODE_FLAG_NVSYNC) ? '-' : '+',

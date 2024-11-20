@@ -98,6 +98,7 @@ static void rp1dpi_pipe_update(struct drm_simple_display_pipe *pipe,
 						dpi->bus_fmt,
 						dpi->de_inv,
 						&pipe->crtc.state->mode);
+				rp1dpi_pio_start(dpi, &pipe->crtc.state->mode);
 				dpi->dpi_running = true;
 			}
 			dpi->cur_fmt = fb->format->format;
@@ -196,6 +197,7 @@ static void rp1dpi_pipe_disable(struct drm_simple_display_pipe *pipe)
 	dev_info(&dpi->pdev->dev, __func__);
 	drm_crtc_vblank_off(&pipe->crtc);
 	if (dpi->dpi_running) {
+		rp1dpi_pio_stop(dpi);
 		rp1dpi_hw_stop(dpi);
 		dpi->dpi_running = false;
 	}
@@ -244,6 +246,7 @@ static void rp1dpi_stopall(struct drm_device *drm)
 		struct rp1_dpi *dpi = drm->dev_private;
 
 		if (dpi->dpi_running || rp1dpi_hw_busy(dpi)) {
+			rp1dpi_pio_stop(dpi);
 			rp1dpi_hw_stop(dpi);
 			clk_disable_unprepare(dpi->clocks[RP1DPI_CLK_DPI]);
 			dpi->dpi_running = false;
@@ -326,6 +329,11 @@ static int rp1dpi_platform_probe(struct platform_device *pdev)
 				       IRQF_SHARED, "rp1-dpi", dpi);
 	if (ret) {
 		dev_err(dev, "Unable to request interrupt\n");
+		return -EINVAL;
+	}
+	ret = rp1dpi_pio_probe(dpi, pdev->dev.of_node);
+	if (ret) {
+		dev_err(dev, "Unable to parse csync-gpio\n");
 		return -EINVAL;
 	}
 

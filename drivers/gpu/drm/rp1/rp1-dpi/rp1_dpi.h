@@ -54,6 +54,13 @@ struct rp1_dpi {
 	u32 shorter_front_porch;
 	bool interlaced;
 	bool lower_field_flag;
+
+	bool csync_gpio_specified;
+	bool pio_enabled;
+	struct rp1_pio_client *pio;
+	unsigned pio_sm;
+	unsigned pio_offset;
+	unsigned csync_gpio;
 };
 
 /* ---------------------------------------------------------------------- */
@@ -75,3 +82,10 @@ void rp1dpi_hw_vblank_ctrl(struct rp1_dpi *dpi, int enable);
 
 void rp1dpi_vidout_setup(struct rp1_dpi *dpi, bool drive_negedge);
 void rp1dpi_vidout_poweroff(struct rp1_dpi *dpi);
+
+/* ---------------------------------------------------------------------- */
+/* PIO control -- we use PIO to generate CSync and fix up interlace       */
+
+int rp1dpi_pio_probe(struct rp1_dpi *dpi, struct device_node *np);
+int rp1dpi_pio_start(struct rp1_dpi *dpi, struct drm_display_mode const *mode);
+void rp1dpi_pio_stop(struct rp1_dpi *dpi);
