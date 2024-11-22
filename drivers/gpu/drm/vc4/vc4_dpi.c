@@ -264,7 +264,7 @@ static enum drm_mode_status vc4_dpi_encoder_mode_valid(struct drm_encoder *encod
 static const struct drm_encoder_helper_funcs vc4_dpi_encoder_helper_funcs = {
 	.disable = vc4_dpi_encoder_disable,
 	.enable = vc4_dpi_encoder_enable,
-	.mode_valid = vc4_dpi_encoder_mode_valid,
+	/*.mode_valid = vc4_dpi_encoder_mode_valid, -- experimentally omit this check. Do not merge. */
 };
 
 static int vc4_dpi_late_register(struct drm_encoder *encoder)
