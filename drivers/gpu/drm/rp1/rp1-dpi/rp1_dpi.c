@@ -80,19 +80,10 @@ static void rp1dpi_pipe_update(struct drm_simple_display_pipe *pipe,
 			if (dpi->dpi_running &&
 			    fb->format->format != dpi->cur_fmt) {
 				rp1dpi_hw_stop(dpi);
+				rp1dpi_pio_stop(dpi);
 				dpi->dpi_running = false;
 			}
 			if (!dpi->dpi_running) {
-
-				/*
-				 * HACK: Panel timings don't have a CSync flag, and RP1 DPI can't
-				 * generate CSync. But we're currently re-using DRM_MODE_FLAG_CSYNC
-				 * to indicate that HSync may be modified, to assist PIO with CSync
-				 * generation (which is currently required for interlace!)
-				 */
-				if (pipe->crtc.state->mode.flags & DRM_MODE_FLAG_INTERLACE)
-					pipe->crtc.state->mode.flags |= DRM_MODE_FLAG_CSYNC;
-
 				rp1dpi_hw_setup(dpi,
 						fb->format->format,
 						dpi->bus_fmt,
@@ -197,8 +188,8 @@ static void rp1dpi_pipe_disable(struct drm_simple_display_pipe *pipe)
 	dev_info(&dpi->pdev->dev, __func__);
 	drm_crtc_vblank_off(&pipe->crtc);
 	if (dpi->dpi_running) {
-		rp1dpi_pio_stop(dpi);
 		rp1dpi_hw_stop(dpi);
+		rp1dpi_pio_stop(dpi);
 		dpi->dpi_running = false;
 	}
 	clk_disable_unprepare(dpi->clocks[RP1DPI_CLK_DPI]);
@@ -246,9 +237,9 @@ static void rp1dpi_stopall(struct drm_device *drm)
 		struct rp1_dpi *dpi = drm->dev_private;
 
 		if (dpi->dpi_running || rp1dpi_hw_busy(dpi)) {
-			rp1dpi_pio_stop(dpi);
 			rp1dpi_hw_stop(dpi);
 			clk_disable_unprepare(dpi->clocks[RP1DPI_CLK_DPI]);
+			rp1dpi_pio_stop(dpi);
 			dpi->dpi_running = false;
 		}
 		rp1dpi_vidout_poweroff(dpi);

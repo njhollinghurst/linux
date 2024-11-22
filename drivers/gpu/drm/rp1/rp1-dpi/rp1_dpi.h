@@ -55,12 +55,10 @@ struct rp1_dpi {
 	bool interlaced;
 	bool lower_field_flag;
 
-	bool csync_gpio_specified;
-	bool pio_enabled;
 	struct rp1_pio_client *pio;
 	unsigned pio_sm;
 	unsigned pio_offset;
-	unsigned csync_gpio;
+	int csync_gpio;
 };
 
 /* ---------------------------------------------------------------------- */
