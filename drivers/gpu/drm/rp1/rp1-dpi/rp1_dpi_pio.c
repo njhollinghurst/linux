@@ -47,9 +47,9 @@ static int rp1dpi_pio_csync_prog(struct rp1_dpi *dpi,
 		0x90a0, //  0: pull   block           side 1
 		0x7040, //  1: out    y, 32           side 1
 		//     .wrap_target
-		0xb222, //  2: mov    x, y            side 1 [2]
+		0xb322, //  2: mov    x, y            side 1 [3]
 		0x3083, //  3: wait   1 gpio, 3       side 1
-		0xa322, //  4: mov    x, y            side 0 [3]
+		0xa422, //  4: mov    x, y            side 0 [4]
 		0x2003, //  5: wait   0 gpio, 3       side 0
 		0x00c7, //  6: jmp    pin, 7          side 0
 		//     .wrap
@@ -132,7 +132,7 @@ static int rp1dpi_pio_start_timers(struct rp1_dpi *dpi, u32 flags, int num, u32 
 		sm_config_set_wrap(&cfg, offset, offset + 3);
 		pio_sm_init(dpi->pio, i + 1, offset, &cfg);
 
-		pio_sm_put(dpi->pio, i + 1, tc[i] - 4);
+		pio_sm_put(dpi->pio, i + 1, tc[i] - 3);
 		pio_sm_exec(dpi->pio, i + 1, pio_encode_pull(false, false));
 		pio_sm_exec(dpi->pio, i + 1, pio_encode_out(pio_y, 32));
 		pio_sm_set_enabled(dpi->pio, i + 1, true);
@@ -146,60 +146,47 @@ static int rp1dpi_pio_start_timers(struct rp1_dpi *dpi, u32 flags, int num, u32 
  * COMPOSITE SYNC FOR INTERLACED
  *
  * DPI VSYNC (GPIO2) must be a modified signal which is always active-low.
- * It should go low for 1 or 2 scanlines, 2.5 or 3 lines before Vsync-start
- * (in the case of 525/60i it should be 3 or 3.5 lines before VSync-start).
- * This is to allow time to generate "equalizing pulses" if required.
+ * It should go low for 1 or 2 scanlines, 1 or 1.5 lines before Vsync-start.
+ * Desired VSync width minus 1 (in half-lines) should be written to the FIFO.
  *
  * Three PIO SMs will be configured as timers, to fire at the end of a left
  * broad pulse, the middle of a scanline, and the end of a right broad pulse.
- *
- * The remaining SM should have its Y register set to equalizing pulse width
- * minus 3 cycles, and its ISR register loaded with one of the following:
- * For 625/50i: 0000_0010_1010_1011_1111_1111_1010_1010 (0x02ABFFAA)
- * For 525/60i: 1010_1010_1011_1111_1111_1110_1010_1010 (0xAABFFEAA)
  *
  * HSYNC->CSYNC latency is about 4 cycles, with a jitter of up to 1 cycle.
  * To minimize jitter, PIO clock should be a multiple of twice the line rate.
  *
  * Default program is compiled for +HSync, -CSync. The program may be
- * modified for other polarities and to remove mid-line equalizing pulses.
+ * modified for other polarities. GPIO2 polarity is always active low.
  */
 
 static int rp1dpi_pio_csync_ilace(struct rp1_dpi *dpi,
 				  struct drm_display_mode const *mode)
 {
-	static const int wrap_target = 4;
-	static const int wrap = 27;
+	static const int wrap_target = 2;
+	static const int wrap = 20;
 	u16 instructions[] = {  /* This is mutable */
-		0x3083, //  0: wait   1 gpio, 3       side 1
-		0xa3e6, //  1: mov    osr, isr        side 0 [3]
-		0x2003, //  2: wait   0 gpio, 3       side 0
-		0x12c0, //  3: jmp    pin, 0          side 1 [2]
+		0x90a0, //  0: pull   block           side 1
+		0x7040, //  1: out    y, 32           side 1
 		//     .wrap_target
-		0xd042, //  4: irq    clear 2         side 1
-		0xd043, //  5: irq    clear 3         side 1
-		0x7021, //  6: out    x, 1            side 1
-		0x102b, //  7: jmp    !x, 11          side 1
-		0x30c2, //  8: wait   1 irq, 2        side 1
-		0x20c3, //  9: wait   1 irq, 3        side 0
-		0x100e, // 10: jmp    14              side 1
-		0x30c2, // 11: wait   1 irq, 2        side 1
-		0xa122, // 12: mov    x, y            side 0 [1]
-		0x004d, // 13: jmp    x--, 13         side 0
-		0x7021, // 14: out    x, 1            side 1
-		0x1020, // 15: jmp    !x, 0           side 1
-		0xd041, // 16: irq    clear 1         side 1
-		0xb022, // 17: mov    x, y            side 1
+		0x3083, //  2: wait   1 gpio, 3       side 1
+		0xa442, //  3: nop                    side 0 [4]
+		0x2003, //  4: wait   0 gpio, 3       side 0
+		0x13c2, //  5: jmp    pin, 2          side 1 [3]
+		0x3083, //  6: wait   1 gpio, 3       side 1
+		0xa322, //  7: mov    x, y            side 0 [3]
+		0xc041, //  8: irq    clear 1         side 0
+		0x2003, //  9: wait   0 gpio, 3       side 0
+		0x00d3, // 10: jmp    pin, 19         side 0
+		0xd042, // 11: irq    clear 2         side 1
+		0xd043, // 12: irq    clear 3         side 1
+		0x30c2, // 13: wait   1 irq, 2        side 1
+		0x20c3, // 14: wait   1 irq, 3        side 0
+		0x1051, // 15: jmp    x--, 17         side 1
+		0x1002, // 16: jmp    2               side 1
+		0xd041, // 17: irq    clear 1         side 1
 		0x3083, // 18: wait   1 gpio, 3       side 1
-		0x0053, // 19: jmp    x--, 19         side 0
-		0x6021, // 20: out    x, 1            side 0
-		0x0037, // 21: jmp    !x, 23          side 0
-		0x20c1, // 22: wait   1 irq, 1        side 0
-		0x7021, // 23: out    x, 1            side 1
-		0x1020, // 24: jmp    !x, 0           side 1
-		0x10c4, // 25: jmp    pin, 4          side 1
-		0xb0e6, // 26: mov    osr, isr        side 1
-		0x7022, // 27: out    x, 2            side 1
+		0x20c1, // 19: wait   1 irq, 1        side 0
+		0x104b, // 20: jmp    x--, 11         side 1
 		//     .wrap
 	};
 	struct pio_program prog = {
@@ -208,35 +195,21 @@ static int rp1dpi_pio_csync_ilace(struct rp1_dpi *dpi,
 		.origin = -1
 	};
 	pio_sm_config cfg = pio_get_default_sm_config();
-	u32 sysclk_khz = clock_get_hz(clk_sys) / 1000u;
 	unsigned i, offset;
-	u32 tc[3], tc_eq, magic;
+	u32 tc[3];
+	u32 sysclk = clock_get_hz(clk_sys);
 	int sm = pio_claim_sm_mask(dpi->pio, 1);
 	if (sm != 0)
 		return -EBUSY;
 
 	/* Compute mid-line and broad-sync time constants and start the 3 "timer" SMs */
-	tc_eq = ((mode->hsync_end - mode->hsync_start) * sysclk_khz) / mode->clock;
-	tc[1] = (mode->htotal * sysclk_khz) / (2 * mode->clock);
-	tc[0] = tc[1] - tc_eq;
+	tc[1] = (mode->htotal * (u64)sysclk) / (u64)(2000u * mode->clock);
+	tc[0] = tc[1] - ((mode->hsync_end - mode->hsync_start) * (u64)sysclk) /
+		(u64)(1000u * mode->clock);
 	tc[2] = tc[0] + tc[1];
 	if (rp1dpi_pio_start_timers(dpi, mode->flags, 3, tc) < 0) {
 		pio_sm_unclaim(dpi->pio, sm);
 		return -EBUSY;
-	}
-
-	/* Configure VSync sequence and equalizing pulses (for SDTV modes only) */
-	if (16 * mode->htotal <= mode->clock || 15 * mode->htotal >= mode->clock ||
-	    ((mode->vtotal >> 1) != 262 && (mode->vtotal >> 1) != 312)) {
-		magic = (0x80u << (2*(mode->vsync_end - mode->vsync_start))) - 0x56u;
-		instructions[12] |= 0x1000; /* kill misaligned EQ pulses */
-		instructions[13] |= 0x1000;
-	} else if ((mode->vtotal >> 1) == 262) {
-		tc_eq = sysclk_khz / 431u;  /* 2.32 us */
-		magic = 0xAABFFEAA;         /* 5-6 short, 6 broad, 6 short */
-	} else {
-		tc_eq = sysclk_khz / 425u;  /* 2.35 us */
-		magic = 0x02ABFFAA;         /* 4-5 short, 5 broad, 5 short */
 	}
 
 	/* Adapt program code according to CSync polarity; configure program */
@@ -251,7 +224,7 @@ static int rp1dpi_pio_csync_ilace(struct rp1_dpi *dpi,
 	if (offset == PIO_ORIGIN_ANY)
 		return -EBUSY;
 
-	/* Configure pins and SM */
+	/* Configure pins and SM; set VSync width; start the SM */
 	i = (dpi->csync_gpio >= 0) ? dpi->csync_gpio : 1;
 	sm_config_set_wrap(&cfg, offset + wrap_target, offset + wrap);
 	sm_config_set_sideset(&cfg, 1, false, false);
@@ -260,15 +233,7 @@ static int rp1dpi_pio_csync_ilace(struct rp1_dpi *dpi,
 	sm_config_set_jmp_pin(&cfg, 2); /* "VSync helper" signal is always GPIO2 */
 	pio_sm_init(dpi->pio, sm, offset, &cfg);
 	pio_sm_set_consecutive_pindirs(dpi->pio, sm, i, 1, true);
-
-	/* Load constants into the ISR and Y registers; start the SM */
-	pio_sm_put(dpi->pio, sm, magic);
-	pio_sm_put(dpi->pio, sm, (tc_eq >= 3) ? (tc_eq - 3) : 0);
-	pio_sm_exec(dpi->pio, sm, pio_encode_pull(false, false));
-	pio_sm_exec(dpi->pio, sm, pio_encode_out(pio_y, 32));
-	pio_sm_exec(dpi->pio, sm, pio_encode_in(pio_y, 32));
-	pio_sm_exec(dpi->pio, sm, pio_encode_pull(false, false));
-	pio_sm_exec(dpi->pio, sm, pio_encode_out(pio_y, 32));
+	pio_sm_put(dpi->pio, sm, mode->vsync_end - mode->vsync_start - 1);
 	pio_sm_set_enabled(dpi->pio, sm, true);
 
 	return 0;

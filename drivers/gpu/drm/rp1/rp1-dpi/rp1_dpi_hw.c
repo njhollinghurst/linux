@@ -425,13 +425,13 @@ void rp1dpi_hw_setup(struct rp1_dpi *dpi,
 		 * PIO can also generate Composite Sync at SDTV rates (with acceptable jitter).
 		 *
 		 * To assist the PIO, VSync is replaced by a "helper" signal, always active low.
-		 * GPIO2 will fall on a scanline boundary, nominally 2.5 or 3 scanlines before
+		 * GPIO2 falls on a scanline boundary, nominally 1.0 or 1.5 scanlines before
 		 * VSync start is due, and stays low for 1 or 2 scanlines respectively.
 		 */
 		int vact  = mode->vdisplay >> 1; /* visible lines per field. Can't do half-lines */
 		int vtot0 = mode->vtotal >> 1;   /* vtotal should always be odd when interlaced. */
-		int vfp0  = (mode->vsync_start >= mode->vdisplay + 7) ?
-			((mode->vsync_start - mode->vdisplay - 5) >> 1) : 1;
+		int vfp0  = (mode->vsync_start >= mode->vdisplay + 2) ?
+			((mode->vsync_start - mode->vdisplay) >> 1) : 1;
 		int vbp   = max(0, vtot0 - vact - vfp0);
 
 		rp1dpi_hw_write(dpi, DPI_DMA_VISIBLE_AREA,
