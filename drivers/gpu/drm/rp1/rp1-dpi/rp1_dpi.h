@@ -56,8 +56,6 @@ struct rp1_dpi {
 	bool lower_field_flag;
 
 	struct rp1_pio_client *pio;
-	unsigned pio_sm;
-	unsigned pio_offset;
 	int csync_gpio;
 };
 

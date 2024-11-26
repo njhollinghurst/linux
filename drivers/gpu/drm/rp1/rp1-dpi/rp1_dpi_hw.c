@@ -370,7 +370,7 @@ void rp1dpi_hw_setup(struct rp1_dpi *dpi,
 		     u32 in_format, u32 bus_format, bool de_inv,
 		    struct drm_display_mode const *mode)
 {
-	u32 shift, imask, omask, rgbsz, ctrls;
+	u32 shift, imask, omask, rgbsz, vctrl;
 	int i;
 
 	drm_info(&dpi->drm,
@@ -408,13 +408,9 @@ void rp1dpi_hw_setup(struct rp1_dpi *dpi,
 				BITS(DPI_DMA_FRONT_PORCH_ROWSM1, mode->vsync_start - mode->vdisplay - 1) |
 				BITS(DPI_DMA_FRONT_PORCH_COLSM1, mode->hsync_start - mode->hdisplay - 1));
 
-		ctrls = BITS(DPI_DMA_CONTROL_HSYNC_POL, !!(mode->flags & DRM_MODE_FLAG_NHSYNC)) |
-			BITS(DPI_DMA_CONTROL_VSYNC_POL, !!(mode->flags & DRM_MODE_FLAG_NVSYNC)) |
-			BITS(DPI_DMA_CONTROL_HBP_EN,    (mode->htotal != mode->hsync_start))    |
-			BITS(DPI_DMA_CONTROL_HFP_EN,    (mode->hsync_start != mode->hdisplay))  |
+		vctrl = BITS(DPI_DMA_CONTROL_VSYNC_POL, !!(mode->flags & DRM_MODE_FLAG_NVSYNC)) |
 			BITS(DPI_DMA_CONTROL_VBP_EN,    (mode->vtotal != mode->vsync_start))    |
 			BITS(DPI_DMA_CONTROL_VFP_EN,    (mode->vsync_start != mode->vdisplay))  |
-			BITS(DPI_DMA_CONTROL_HSYNC_EN,  (mode->hsync_end != mode->hsync_start)) |
 			BITS(DPI_DMA_CONTROL_VSYNC_EN,  (mode->vsync_end != mode->vsync_start));
 		dpi->interlaced = false;
 	} else {
@@ -428,15 +424,14 @@ void rp1dpi_hw_setup(struct rp1_dpi *dpi,
 		 * It will be necessary to use external hardware (or PIO) to regenerate VSync.
 		 * PIO can also generate Composite Sync at SDTV rates (with acceptable jitter).
 		 *
-		 * Right now, we generate only CSync. To assist the PIO, both VSync and HSync
-		 * are replaced by "helper" signals. GPIO2 falls nominally 2.5 or 3 lines before
-		 * the sync pulse is due, and stays low for 1 or 2 lines, to signal field phase.
-		 * GPIO3 becomes a square wave (rising at line start) to assist half-line timing.
+		 * To assist the PIO, VSync is replaced by a "helper" signal, always active low.
+		 * GPIO2 will fall on a scanline boundary, nominally 2.5 or 3 scanlines before
+		 * VSync start is due, and stays low for 1 or 2 scanlines respectively.
 		 */
 		int vact  = mode->vdisplay >> 1; /* visible lines per field. Can't do half-lines */
 		int vtot0 = mode->vtotal >> 1;   /* vtotal should always be odd when interlaced. */
-		int vfp0  = (mode->vsync_start >= mode->vdisplay + 5) ?
-			((mode->vsync_start - mode->vdisplay - 3) >> 1) : 1;
+		int vfp0  = (mode->vsync_start >= mode->vdisplay + 7) ?
+			((mode->vsync_start - mode->vdisplay - 5) >> 1) : 1;
 		int vbp   = max(0, vtot0 - vact - vfp0);
 
 		rp1dpi_hw_write(dpi, DPI_DMA_VISIBLE_AREA,
@@ -445,7 +440,7 @@ void rp1dpi_hw_setup(struct rp1_dpi *dpi,
 
 		rp1dpi_hw_write(dpi, DPI_DMA_SYNC_WIDTH,
 				BITS(DPI_DMA_SYNC_WIDTH_ROWSM1, vtot0 - 2) |
-				BITS(DPI_DMA_SYNC_WIDTH_COLSM1, mode->htotal >> 1));
+				BITS(DPI_DMA_SYNC_WIDTH_COLSM1, mode->hsync_end - mode->hsync_start - 1));
 
 		rp1dpi_hw_write(dpi, DPI_DMA_BACK_PORCH,
 				BITS(DPI_DMA_BACK_PORCH_ROWSM1, vbp - 1) |
@@ -456,13 +451,9 @@ void rp1dpi_hw_setup(struct rp1_dpi *dpi,
 			BITS(DPI_DMA_FRONT_PORCH_COLSM1, mode->hsync_start - mode->hdisplay - 1);
 		rp1dpi_hw_write(dpi, DPI_DMA_FRONT_PORCH, dpi->shorter_front_porch);
 
-		ctrls = BITS(DPI_DMA_CONTROL_HBP_EN,    (mode->htotal != mode->hsync_start))   |
-			BITS(DPI_DMA_CONTROL_HFP_EN,    (mode->hsync_start != mode->hdisplay)) |
-			BITS(DPI_DMA_CONTROL_VBP_EN,    (vbp != 0))                            |
-			BITS(DPI_DMA_CONTROL_VFP_EN,    1)                                     |
-			BITS(DPI_DMA_CONTROL_HSYNC_EN,  1)                                     |
-			BITS(DPI_DMA_CONTROL_VSYNC_EN,  1);
-
+		vctrl = BITS(DPI_DMA_CONTROL_VBP_EN,   (vbp != 0))  |
+			BITS(DPI_DMA_CONTROL_VFP_EN,   1)           |
+			BITS(DPI_DMA_CONTROL_VSYNC_EN, 1);
 		dpi->interlaced = true;
 	}
 	dpi->lower_field_flag = false;
@@ -504,13 +495,15 @@ void rp1dpi_hw_setup(struct rp1_dpi *dpi,
 		pr_warn("%s: Unexpectedly busy at start!", __func__);
 
 	rp1dpi_hw_write(dpi, DPI_DMA_CONTROL,
+			vctrl                                  |
 			BITS(DPI_DMA_CONTROL_ARM,          !i) |
 			BITS(DPI_DMA_CONTROL_AUTO_REPEAT,   1) |
 			BITS(DPI_DMA_CONTROL_HIGH_WATER,  448) |
 			BITS(DPI_DMA_CONTROL_DEN_POL,  de_inv) |
-			BITS(DPI_DMA_CONTROL_COLORM,	   0) |
-			BITS(DPI_DMA_CONTROL_SHUTDN,	   0) |
-			ctrls);
+			BITS(DPI_DMA_CONTROL_HSYNC_POL, !!(mode->flags & DRM_MODE_FLAG_NHSYNC)) |
+			BITS(DPI_DMA_CONTROL_HBP_EN,    (mode->htotal != mode->hsync_end))      |
+			BITS(DPI_DMA_CONTROL_HFP_EN,    (mode->hsync_start != mode->hdisplay))  |
+			BITS(DPI_DMA_CONTROL_HSYNC_EN,  (mode->hsync_end != mode->hsync_start)));
 }
 
 void rp1dpi_hw_update(struct rp1_dpi *dpi, dma_addr_t addr, u32 offset, u32 stride)
