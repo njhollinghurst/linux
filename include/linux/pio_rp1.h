@@ -20,7 +20,7 @@
 #endif
 
 #define bad_params_if(client, test) \
-	({ bool f = (test); if (f) pio_set_error(client, -EINVAL); \
+	({ bool f = (test); if (f && client) pio_set_error(client, -EINVAL); \
 		if (f && PARAM_WARNINGS_ENABLED) WARN_ON((test)); \
 		f; })
 
@@ -245,7 +245,7 @@ static inline bool pio_can_add_program_at_offset(struct rp1_pio_client *client,
 	return !rp1_pio_can_add_program(client, &args);
 }
 
-uint pio_add_program(struct rp1_pio_client *client, const pio_program_t *program)
+static inline uint pio_add_program(struct rp1_pio_client *client, const pio_program_t *program)
 {
 	struct rp1_pio_add_program_args args;
 	int offset;
@@ -318,7 +318,7 @@ static inline int pio_sm_unclaim(struct rp1_pio_client *client, uint sm)
 	if (bad_params_if(client, sm >= NUM_PIO_STATE_MACHINES))
 		return -EINVAL;
 
-	return rp1_pio_sm_claim(client, &args);
+	return rp1_pio_sm_unclaim(client, &args);
 }
 
 static inline int pio_claim_unused_sm(struct rp1_pio_client *client, bool required)
@@ -365,7 +365,7 @@ static inline int pio_sm_set_config(struct rp1_pio_client *client, uint sm,
 	return rp1_pio_sm_set_config(client, &args);
 }
 
-int pio_sm_exec(struct rp1_pio_client *client, uint sm, uint instr)
+static inline int pio_sm_exec(struct rp1_pio_client *client, uint sm, uint instr)
 {
 	struct rp1_pio_sm_exec_args args = { .sm = sm, .instr = instr, .blocking = false };
 
@@ -375,7 +375,7 @@ int pio_sm_exec(struct rp1_pio_client *client, uint sm, uint instr)
 	return rp1_pio_sm_exec(client, &args);
 }
 
-int pio_sm_exec_wait_blocking(struct rp1_pio_client *client, uint sm, uint instr)
+static inline int pio_sm_exec_wait_blocking(struct rp1_pio_client *client, uint sm, uint instr)
 {
 	struct rp1_pio_sm_exec_args args = { .sm = sm, .instr = instr, .blocking = true };
 
