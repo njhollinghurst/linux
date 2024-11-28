@@ -509,7 +509,6 @@ void rp1dpi_hw_setup(struct rp1_dpi *dpi,
 void rp1dpi_hw_update(struct rp1_dpi *dpi, dma_addr_t addr, u32 offset, u32 stride)
 {
 	unsigned long flags;
-	u64 a = addr + offset;
 
 	spin_lock_irqsave(&dpi->hw_lock, flags);
 
@@ -520,19 +519,17 @@ void rp1dpi_hw_update(struct rp1_dpi *dpi, dma_addr_t addr, u32 offset, u32 stri
 	 * the address and stride to display only the current field, saving the
 	 * the original address (so it can be flipped for subsequent fields).
 	 */
-	bool first = (dpi->last_dma_addr == 0);
-	dpi->last_dma_addr = a;
+	addr += offset;
+	dpi->last_dma_addr = addr;
 	dpi->last_stride = stride;
 	if (dpi->interlaced) {
 		if (dpi->lower_field_flag)
 			addr += stride;
 		stride *= 2;
 	}
-	if (first || !dpi->interlaced) {
-		rp1dpi_hw_write(dpi, DPI_DMA_DMA_STRIDE, stride);
-		rp1dpi_hw_write(dpi, DPI_DMA_DMA_ADDR_H, a >> 32);
-		rp1dpi_hw_write(dpi, DPI_DMA_DMA_ADDR_L, a & 0xFFFFFFFFu);
-	}
+	rp1dpi_hw_write(dpi, DPI_DMA_DMA_STRIDE, stride);
+	rp1dpi_hw_write(dpi, DPI_DMA_DMA_ADDR_H, addr >> 32);
+	rp1dpi_hw_write(dpi, DPI_DMA_DMA_ADDR_L, addr & 0xFFFFFFFFu);
 
 	spin_unlock_irqrestore(&dpi->hw_lock, flags);
 }
@@ -568,7 +565,7 @@ void rp1dpi_hw_vblank_ctrl(struct rp1_dpi *dpi, int enable)
 			BITS(DPI_DMA_IRQ_EN_UNDERFLOW, 1)           |
 			BITS(DPI_DMA_IRQ_EN_DMA_READY, !!enable)    |
 			BITS(DPI_DMA_IRQ_EN_MATCH, dpi->interlaced) |
-			BITS(DPI_DMA_IRQ_EN_MATCH_LINE, 200));
+			BITS(DPI_DMA_IRQ_EN_MATCH_LINE, 32));
 }
 
 irqreturn_t rp1dpi_hw_isr(int irq, void *dev)
