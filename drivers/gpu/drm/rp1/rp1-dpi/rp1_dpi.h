@@ -47,16 +47,19 @@ struct rp1_dpi {
 	bool dpi_running, pipe_enabled;
 	struct completion finished;
 
-	/* Experimental stuff for interlace */
-	struct spinlock hw_lock;
+	/* Experimental stuff for interlace follows */
+	struct rp1_pio_client *pio;
+	int csync_gpio;
+	bool gpio1_used;
+	bool pio_stole_gpio1;
+	bool pio_stole_gpio2;
+
+	spinlock_t hw_lock; /* the following are used in line-match ISR */
 	dma_addr_t last_dma_addr;
 	u32 last_stride;
 	u32 shorter_front_porch;
 	bool interlaced;
 	bool lower_field_flag;
-
-	struct rp1_pio_client *pio;
-	int csync_gpio;
 };
 
 /* ---------------------------------------------------------------------- */
@@ -82,6 +85,6 @@ void rp1dpi_vidout_poweroff(struct rp1_dpi *dpi);
 /* ---------------------------------------------------------------------- */
 /* PIO control -- we use PIO to generate CSync and fix up interlace       */
 
-int rp1dpi_pio_probe(struct rp1_dpi *dpi, struct device_node *np);
-int rp1dpi_pio_start(struct rp1_dpi *dpi, struct drm_display_mode const *mode);
+int rp1dpi_pio_probe(struct rp1_dpi *dpi, const struct device_node *np);
+int rp1dpi_pio_start(struct rp1_dpi *dpi, const struct drm_display_mode *mode);
 void rp1dpi_pio_stop(struct rp1_dpi *dpi);

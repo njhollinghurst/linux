@@ -374,23 +374,50 @@ void rp1dpi_hw_setup(struct rp1_dpi *dpi,
 	int i;
 
 	drm_info(&dpi->drm,
-		"in_fmt=\'%c%c%c%c\' bus_fmt=0x%x mode=%dx%d total=%dx%d%s %dkHz %cH%cV%cD%cC",
-		in_format, in_format >> 8, in_format >> 16, in_format >> 24, bus_format,
-		mode->hdisplay, mode->vdisplay,
-		mode->htotal, mode->vtotal,
-		(mode->flags & DRM_MODE_FLAG_INTERLACE) ? "i" : "",
-		mode->clock,
-		(mode->flags & DRM_MODE_FLAG_NHSYNC) ? '-' : '+',
-		(mode->flags & DRM_MODE_FLAG_NVSYNC) ? '-' : '+',
-		de_inv ? '-' : '+',
-		dpi->clk_inv ? '-' : '+');
+		 "in_fmt=\'%c%c%c%c\' bus_fmt=0x%x mode=%dx%d total=%dx%d%s %dkHz %cH%cV%cD%cC",
+		 in_format, in_format >> 8, in_format >> 16, in_format >> 24, bus_format,
+		 mode->hdisplay, mode->vdisplay,
+		 mode->htotal, mode->vtotal,
+		 (mode->flags & DRM_MODE_FLAG_INTERLACE) ? "i" : "",
+		 mode->clock,
+		 (mode->flags & DRM_MODE_FLAG_NHSYNC) ? '-' : '+',
+		 (mode->flags & DRM_MODE_FLAG_NVSYNC) ? '-' : '+',
+		 de_inv ? '-' : '+',
+		 dpi->clk_inv ? '-' : '+');
+
+	/*
+	 * Configure all DPI/DMA block registers, except base address.
+	 * DMA will not actually start until a FB base address is specified
+	 * using rp1dpi_hw_update().
+	 */
+	for (i = 0; i < ARRAY_SIZE(my_formats); ++i) {
+		if (my_formats[i].format == in_format)
+			break;
+	}
+	if (i >= ARRAY_SIZE(my_formats)) {
+		pr_err("%s: bad input format\n", __func__);
+		i = 4;
+	}
+	if (BUS_FMT_IS_BGR(bus_format))
+		i ^= 1;
+	shift = my_formats[i].shift;
+	imask = my_formats[i].mask;
+	rgbsz = my_formats[i].rgbsz;
+	omask = set_output_format(bus_format, &shift, &imask, &rgbsz);
+
+	rp1dpi_hw_write(dpi, DPI_DMA_IMASK, imask);
+	rp1dpi_hw_write(dpi, DPI_DMA_OMASK, omask);
+	rp1dpi_hw_write(dpi, DPI_DMA_SHIFT, shift);
+	rp1dpi_hw_write(dpi, DPI_DMA_RGBSZ, rgbsz);
+
+	rp1dpi_hw_write(dpi, DPI_DMA_QOS,
+			BITS(DPI_DMA_QOS_DQOS, 0x0) |
+			BITS(DPI_DMA_QOS_ULEV, 0xb) |
+			BITS(DPI_DMA_QOS_UQOS, 0x2) |
+			BITS(DPI_DMA_QOS_LLEV, 0x8) |
+			BITS(DPI_DMA_QOS_LQOS, 0x7));
 
 	if (!(mode->flags & DRM_MODE_FLAG_INTERLACE)) {
-		/*
-		 * Configure all DPI/DMA block registers, except base address.
-		 * DMA will not actually start until a FB base address is specified
-		 * using rp1dpi_hw_update().
-		 */
 		rp1dpi_hw_write(dpi, DPI_DMA_VISIBLE_AREA,
 				BITS(DPI_DMA_VISIBLE_AREA_ROWSM1, mode->vdisplay - 1) |
 				BITS(DPI_DMA_VISIBLE_AREA_COLSM1, mode->hdisplay - 1));
@@ -412,6 +439,7 @@ void rp1dpi_hw_setup(struct rp1_dpi *dpi,
 			BITS(DPI_DMA_CONTROL_VBP_EN,    (mode->vtotal != mode->vsync_start))    |
 			BITS(DPI_DMA_CONTROL_VFP_EN,    (mode->vsync_start != mode->vdisplay))  |
 			BITS(DPI_DMA_CONTROL_VSYNC_EN,  (mode->vsync_end != mode->vsync_start));
+
 		dpi->interlaced = false;
 	} else {
 		/*
@@ -454,38 +482,11 @@ void rp1dpi_hw_setup(struct rp1_dpi *dpi,
 		vctrl = BITS(DPI_DMA_CONTROL_VBP_EN,   (vbp != 0))  |
 			BITS(DPI_DMA_CONTROL_VFP_EN,   1)           |
 			BITS(DPI_DMA_CONTROL_VSYNC_EN, 1);
+
 		dpi->interlaced = true;
 	}
 	dpi->lower_field_flag = false;
 	dpi->last_dma_addr = 0;
-
-	/* Input to output pixel format conversion */
-	for (i = 0; i < ARRAY_SIZE(my_formats); ++i) {
-		if (my_formats[i].format == in_format)
-			break;
-	}
-	if (i >= ARRAY_SIZE(my_formats)) {
-		pr_err("%s: bad input format\n", __func__);
-		i = 4;
-	}
-	if (BUS_FMT_IS_BGR(bus_format))
-		i ^= 1;
-	shift = my_formats[i].shift;
-	imask = my_formats[i].mask;
-	rgbsz = my_formats[i].rgbsz;
-	omask = set_output_format(bus_format, &shift, &imask, &rgbsz);
-
-	rp1dpi_hw_write(dpi, DPI_DMA_IMASK, imask);
-	rp1dpi_hw_write(dpi, DPI_DMA_OMASK, omask);
-	rp1dpi_hw_write(dpi, DPI_DMA_SHIFT, shift);
-	rp1dpi_hw_write(dpi, DPI_DMA_RGBSZ, rgbsz);
-
-	rp1dpi_hw_write(dpi, DPI_DMA_QOS,
-			BITS(DPI_DMA_QOS_DQOS, 0x0) |
-			BITS(DPI_DMA_QOS_ULEV, 0xb) |
-			BITS(DPI_DMA_QOS_UQOS, 0x2) |
-			BITS(DPI_DMA_QOS_LLEV, 0x8) |
-			BITS(DPI_DMA_QOS_LQOS, 0x7));
 
 	rp1dpi_hw_write(dpi, DPI_DMA_IRQ_FLAGS, -1);
 	rp1dpi_hw_vblank_ctrl(dpi, 1);
@@ -516,7 +517,7 @@ void rp1dpi_hw_update(struct rp1_dpi *dpi, dma_addr_t addr, u32 offset, u32 stri
 	 * Update STRIDE, DMAH and DMAL only. When called after rp1dpi_hw_setup(),
 	 * DMA starts immediately; if already running, the buffer will flip at
 	 * the next vertical sync event. In interlaced mode, we need to adjust
-	 * the address and stride to display only the current field, saving the
+	 * the address and stride to display only the current field, saving
 	 * the original address (so it can be flipped for subsequent fields).
 	 */
 	addr += offset;
@@ -599,7 +600,8 @@ irqreturn_t rp1dpi_hw_isr(int irq, void *dev)
 				spin_lock_irqsave(&dpi->hw_lock, flags);
 				dpi->lower_field_flag = !dpi->lower_field_flag;
 				rp1dpi_hw_write(dpi, DPI_DMA_FRONT_PORCH,
-						dpi->shorter_front_porch + BITS(DPI_DMA_FRONT_PORCH_ROWSM1, dpi->lower_field_flag));
+						dpi->shorter_front_porch +
+						BITS(DPI_DMA_FRONT_PORCH_ROWSM1, dpi->lower_field_flag));
 				a = dpi->last_dma_addr;
 				if (a) {
 					if (dpi->lower_field_flag)
