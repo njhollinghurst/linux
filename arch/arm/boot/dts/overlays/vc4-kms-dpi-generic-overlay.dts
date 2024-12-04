@@ -42,6 +42,12 @@
 		target = <&dpi>;
 		dpi_node_generic: __overlay__  {
 			pinctrl-0 = <&dpi_18bit_gpio0>;
+		};
+	};
+
+	fragment@2 {
+		target = <&dpi>;
+		__dormant__  {
 			csync-gpio = <&gpio 1 0>;
 		};
 	};
@@ -80,5 +86,6 @@
 			<&dpi_node_generic>, "pinctrl-0:0=",<&dpi_gpio0>;
 		bus-format = <&panel_generic>, "bus-format:0";
 		rgb-order = <&dpi_node_generic>, "rgb_order";
+		csync = <0>, "+2";
 	};
 };
