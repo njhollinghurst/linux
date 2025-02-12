@@ -1,0 +1,17 @@
+/*
+ * test-rp1-audio-out-overlay.dts -- for testing, do not merge
+ */
+
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "brcm,bcm2835";
+
+	fragment@0 {
+		target = <&rp1_audio_out>;
+		__overlay__ {
+			status = "ok";
+		};
+	};
+};
