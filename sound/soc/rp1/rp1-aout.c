@@ -34,8 +34,10 @@ struct rp1_aout {
 	struct clk *clk;
 	struct dma_chan *chan;
 	int opened;
-	spinlock_t count_lock; /* protects the IRQ counter */
-	u32 counter;
+	spinlock_t pos_lock; /* protects the following in ISR context */
+	dma_cookie_t cookie;
+	snd_pcm_uframes_t pos_period;
+	snd_pcm_uframes_t pos_last;
 };
 
 static inline void aout_reg_wr(struct rp1_aout *ao, unsigned int offset, u32 val)
@@ -147,10 +149,10 @@ static const struct snd_pcm_hardware rp1_aout_hw = {
 	.rates = SNDRV_PCM_RATE_48000,
 	.rate_min = 48000,
 	.rate_max = 48000,
-	.channels_min = 1,
+	.channels_min = 2,
 	.channels_max = 2,
 	.buffer_bytes_max = 128 * 1024,
-	.period_bytes_min =   4 * 1024,
+	.period_bytes_min =   1 * 1024,
 	.period_bytes_max = 128 * 1024,
 	.periods_min = 1,
 	.periods_max = 16,
@@ -240,9 +242,10 @@ static void my_callback(void * arg)
 		struct rp1_aout *aout = snd_pcm_substream_chip(substream);
 		unsigned long flags;
 
-		spin_lock_irqsave(&aout->count_lock, flags);
-		aout->counter++;
-		spin_unlock_irqrestore(&aout->count_lock, flags);
+		spin_lock_irqsave(&aout->pos_lock, flags);
+		aout->pos_period += substream->runtime->period_size;
+		spin_unlock_irqrestore(&aout->pos_lock, flags);
+
 		snd_pcm_period_elapsed(substream);
 	}
 }
@@ -258,14 +261,14 @@ static int rp1_aout_prepare(struct snd_pcm_substream *substream)
 
 	memset(&config, 0, sizeof(config));
 	config.direction = DMA_MEM_TO_DEV;
-	config.dst_addr_width = (runtime->channels < 2) ? DMA_SLAVE_BUSWIDTH_2_BYTES : DMA_SLAVE_BUSWIDTH_4_BYTES;
+	config.dst_addr_width = DMA_SLAVE_BUSWIDTH_4_BYTES;
 	config.dst_addr = aout->physaddr + AUDIO_OUT_SAMPLE_FIFO_OFFSET;
 	config.dst_maxburst = 4;
 	config.device_fc = false;
 	ret = dmaengine_slave_config(aout->chan, &config);
 	desc = dmaengine_prep_dma_cyclic(aout->chan, runtime->dma_addr,
-					 runtime->buffer_size * 2 * runtime->channels,
-					 runtime->period_size * 2 * runtime->channels,
+					 frames_to_bytes(runtime, runtime->buffer_size),
+					 frames_to_bytes(runtime, runtime->period_size),
 					 DMA_MEM_TO_DEV,
 					 DMA_PREP_INTERRUPT | DMA_CTRL_ACK | DMA_PREP_FENCE);
 	if (!desc) {
@@ -275,9 +278,11 @@ static int rp1_aout_prepare(struct snd_pcm_substream *substream)
 	desc->callback = my_callback;
 	desc->callback_param = substream;
 	ret = dmaengine_submit(desc);
-	spin_lock_irqsave(&aout->count_lock, flags);
-	aout->counter = 0;
-	spin_unlock_irqrestore(&aout->count_lock, flags);
+	spin_lock_irqsave(&aout->pos_lock, flags);
+	aout->cookie = ret;
+	aout->pos_period = 0;
+	aout->pos_last = 0;
+	spin_unlock_irqrestore(&aout->pos_lock, flags);
 
 	return (ret < 0) ? ret : 0;
 }
@@ -305,13 +310,31 @@ static snd_pcm_uframes_t rp1_aout_pointer(struct snd_pcm_substream *substream)
 {
 	struct rp1_aout *aout = snd_pcm_substream_chip(substream);
 	unsigned long flags;
-	unsigned long samp;
+	struct dma_tx_state state;
+	snd_pcm_uframes_t pos;
+	enum dma_status st;
 
-	spin_lock_irqsave(&aout->count_lock, flags);
-	samp = aout->counter;
-	spin_unlock_irqrestore(&aout->count_lock, flags);
-	samp = (samp * substream->runtime->period_size) % substream->runtime->buffer_size;
-	return samp;
+	spin_lock_irqsave(&aout->pos_lock, flags);
+	st = dmaengine_tx_status(aout->chan, aout->cookie, &state);
+	pos = aout->pos_period;
+	if (st == DMA_IN_PROGRESS) {
+		snd_pcm_uframes_t u;
+
+		u = bytes_to_frames(substream->runtime, state.residue);
+		u %= substream->runtime->period_size;
+		if (u)
+			pos += substream->runtime->period_size - u;
+	}
+	if (pos < aout->pos_last)
+		pos += substream->runtime->period_size;
+	if (aout->pos_period >= substream->runtime->buffer_size) {
+		aout->pos_period -= substream->runtime->buffer_size;
+		pos -= substream->runtime->buffer_size;
+	}
+	aout->pos_last = pos;
+	spin_unlock_irqrestore(&aout->pos_lock, flags);
+
+	return pos % substream->runtime->buffer_size;
 }
 
 static struct snd_pcm_ops rp1_aout_ops = {
@@ -352,7 +375,7 @@ static int rp1_aout_platform_probe(struct platform_device *pdev)
 				     "could not request DMA channel\n");
 
 
-	spin_lock_init(&aout->count_lock);
+	spin_lock_init(&aout->pos_lock);
 	aout->dev = &pdev->dev;
 	dev_set_drvdata(&pdev->dev, aout);
 
