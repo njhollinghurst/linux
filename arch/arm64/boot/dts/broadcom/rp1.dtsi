@@ -392,6 +392,7 @@
 			dma-names = "tx";
 			pinctrl-names = "default";
 			pinctrl-0 = <&rp1_audio_out_12_13>;
+			#sound-dai-cells = <0>;
 			status = "disabled";
 		};
 
