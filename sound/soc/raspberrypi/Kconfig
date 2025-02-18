@@ -2,6 +2,5 @@
 config SND_RP1_AUDIO_OUT
 	tristate "PWM Audio Out from RP1"
 	help
-	 Say Y or M if you want to add support for digital audio
-	 output from Raspberry Pi 5.
-
+	 Say Y or M if you want to add support for PWM
+	 digital audio output from Raspberry Pi 5, 500 or CM5.
