@@ -14,4 +14,39 @@
 			status = "ok";
 		};
 	};
+
+	fragment@1 {
+		 target-path = "/";
+		 __overlay__ {
+
+			 dummy_codec: audio-codec {
+			     compatible = "linux,spdif-dit";
+			     #sound-dai-cells = <0>;
+			     status = "ok";
+			 };
+
+			 audio_out {
+			     compatible = "simple-audio-card";
+			     simple-audio-card,name = "RP1-PWM-Audio-Out";
+			     #address-cells = <1>;
+			     #size-cells = <0>;
+			     status = "ok";
+
+			     simple-audio-card,dai-link@0 {
+				 reg = <0>;
+				 format = "left_j";
+				 bitclock-master = <&sndcpu0>;
+				 frame-master = <&sndcpu0>;
+
+				sndcpu0: cpu {
+					sound-dai = <&rp1_audio_out>;
+				};
+
+				codec {
+				    sound-dai = <&dummy_codec>;
+				};
+			    };
+			};
+		};
+	};
 };
