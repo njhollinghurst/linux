@@ -28,6 +28,9 @@ static int qbc_adjust = 2;
 module_param(qbc_adjust, int, 0644);
 MODULE_PARM_DESC(qbc_adjust, "Quad Bayer broken line correction strength [0,2-5]");
 
+/* To experiment with "PDAF Type 2" which libcamera can't currently handle */
+#define PDAF_TYPE 2
+
 #define IMX708_REG_VALUE_08BIT		1
 #define IMX708_REG_VALUE_16BIT		2
 
@@ -123,8 +126,15 @@ MODULE_PARM_DESC(qbc_adjust, "Quad Bayer broken line correction strength [0,2-5]
  * It comprises two scanlines (of up to 5760 bytes each, for 4608 pixels)
  * of embedded data, one line of PDAF data, and two lines of AE-HIST data
  * (AE histograms are valid for HDR mode and empty in non-HDR modes).
+ *
+ * In the experimental PDAF Type 2 version, pad the PDAF packets to a multiple
+ * of 32 bytes (and of 4 samples) to avoid a mismatch between Unicam and RP1.
  */
+#if PDAF_TYPE == 2
+#define IMX708_EMBEDDED_LINE_WIDTH (4 * 5760 + 158 * 2 * 480)
+#else
 #define IMX708_EMBEDDED_LINE_WIDTH (5 * 5760)
+#endif
 #define IMX708_NUM_EMBEDDED_LINES 1
 
 enum pad_types {
@@ -253,9 +263,9 @@ static const struct imx708_reg mode_common_regs[] = {
 	{0x306A, 0x00},
 	{0x306B, 0x30},
 	{0x3076, 0x00},
-	{0x3077, 0x30},
+	{0x3077, 0x12}, // change PDAF TYPE 2 L data to DT=0x12 to match metadata
 	{0x3078, 0x00},
-	{0x3079, 0x30},
+	{0x3079, 0x12}, // change PDAF TYPE 2 R data to DT=0x12 to match metadata
 	{0x5E54, 0x0C},
 	{0x6E44, 0x00},
 	{0xB0B6, 0x01},
@@ -275,11 +285,16 @@ static const struct imx708_reg mode_common_regs[] = {
 	{0x0B8F, 0x00},
 	{0x0B94, 0x01},
 	{0x0B95, 0x00},
-	{0x3400, 0x01},
+	{0x3400, PDAF_TYPE},
+#if PDAF_TYPE == 2
+	{0x3478, 0x01},
+	{0x3479, 0x80}, // pad PDAF packets to a multiple of 32 bytes to help Unicam
+#else
 	{0x3478, 0x01},
 	{0x3479, 0x1c},
-	{0x3091, 0x01},
-	{0x3092, 0x00},
+#endif
+	{0x3091, (PDAF_TYPE==1)},
+	{0x3092, (PDAF_TYPE==2)},
 	{0x3419, 0x00},
 	{0xBCF1, 0x02},
 	{0x3094, 0x01},
@@ -293,8 +308,13 @@ static const struct imx708_reg mode_common_regs[] = {
 
 /* 10-bit. */
 static const struct imx708_reg mode_4608x2592_regs[] = {
+#if PDAF_TYPE == 2
+	{0x0342, 0x51}, // PDAF Type 2 requires wider lines to accommodate extra data
+	{0x0343, 0x80},
+#else
 	{0x0342, 0x3D},
 	{0x0343, 0x20},
+#endif
 	{0x0340, 0x0A},
 	{0x0341, 0x59},
 	{0x0344, 0x00},
@@ -372,6 +392,7 @@ static const struct imx708_reg mode_4608x2592_regs[] = {
 	{0x3119, 0x00},
 	{0x311A, 0x01},
 	{0x311B, 0x00},
+#if PDAF_TYPE == 1
 	{0x341a, 0x00},
 	{0x341b, 0x00},
 	{0x341c, 0x00},
@@ -380,6 +401,7 @@ static const struct imx708_reg mode_4608x2592_regs[] = {
 	{0x341f, 0x20},
 	{0x3420, 0x00},
 	{0x3421, 0xd8},
+#endif
 	{0x3366, 0x00},
 	{0x3367, 0x00},
 	{0x3368, 0x00},
@@ -387,8 +409,13 @@ static const struct imx708_reg mode_4608x2592_regs[] = {
 };
 
 static const struct imx708_reg mode_2x2binned_regs[] = {
+#if PDAF_TYPE == 2
+	{0x0342, 0x25}, // PDAF Type 2 requires wider lines to accommodate extra data
+	{0x0343, 0x20},
+#else
 	{0x0342, 0x1E},
 	{0x0343, 0x90},
+#endif
 	{0x0340, 0x05},
 	{0x0341, 0x38},
 	{0x0344, 0x00},
@@ -466,6 +493,7 @@ static const struct imx708_reg mode_2x2binned_regs[] = {
 	{0x3119, 0x70},
 	{0x311A, 0x01},
 	{0x311B, 0x00},
+#if PDAF_TYPE == 1
 	{0x341a, 0x00},
 	{0x341b, 0x00},
 	{0x341c, 0x00},
@@ -474,6 +502,7 @@ static const struct imx708_reg mode_2x2binned_regs[] = {
 	{0x341f, 0x90},
 	{0x3420, 0x00},
 	{0x3421, 0x6c},
+#endif
 	{0x3366, 0x00},
 	{0x3367, 0x00},
 	{0x3368, 0x00},
@@ -560,6 +589,7 @@ static const struct imx708_reg mode_2x2binned_720p_regs[] = {
 	{0x3119, 0x70},
 	{0x311A, 0x01},
 	{0x311B, 0x00},
+#if PDAF_TYPE == 1
 	{0x341a, 0x00},
 	{0x341b, 0x00},
 	{0x341c, 0x00},
@@ -568,6 +598,7 @@ static const struct imx708_reg mode_2x2binned_720p_regs[] = {
 	{0x341f, 0x60},
 	{0x3420, 0x00},
 	{0x3421, 0x48},
+#endif
 	{0x3366, 0x00},
 	{0x3367, 0x00},
 	{0x3368, 0x00},
@@ -654,6 +685,7 @@ static const struct imx708_reg mode_hdr_regs[] = {
 	{0x3119, 0x00},
 	{0x311A, 0x01},
 	{0x311B, 0x00},
+#if PDAF_TYPE == 1
 	{0x341a, 0x00},
 	{0x341b, 0x00},
 	{0x341c, 0x00},
@@ -662,6 +694,7 @@ static const struct imx708_reg mode_hdr_regs[] = {
 	{0x341f, 0x90},
 	{0x3420, 0x00},
 	{0x3421, 0x6c},
+#endif
 	{0x3360, 0x01},
 	{0x3361, 0x01},
 	{0x3366, 0x09},
@@ -676,7 +709,11 @@ static const struct imx708_mode supported_modes_10bit_no_hdr[] = {
 		/* Full resolution. */
 		.width = 4608,
 		.height = 2592,
+#if PDAF_TYPE == 2
+		.line_length_pix = 0x5180,
+#else
 		.line_length_pix = 0x3d20,
+#endif
 		.crop = {
 			.left = IMX708_PIXEL_ARRAY_LEFT,
 			.top = IMX708_PIXEL_ARRAY_TOP,
@@ -699,7 +736,11 @@ static const struct imx708_mode supported_modes_10bit_no_hdr[] = {
 		/* regular 2x2 binned. */
 		.width = 2304,
 		.height = 1296,
+#if PDAF_TYPE == 2
+		.line_length_pix = 0x2520,
+#else
 		.line_length_pix = 0x1e90,
+#endif
 		.crop = {
 			.left = IMX708_PIXEL_ARRAY_LEFT,
 			.top = IMX708_PIXEL_ARRAY_TOP,
