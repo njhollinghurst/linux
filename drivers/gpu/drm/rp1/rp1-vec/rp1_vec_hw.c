@@ -103,10 +103,9 @@ static const struct rp1vec_ipixfmt my_formats[] = {
  * Driver should adjust some values for other TV standards and for pixel rate,
  * and must ensure that ((de_end - de_bgn) % rate) == 0.
  *
- * To support 60fps update in interlaced modes, we now do ISR-based field-flip.
- * The FIELDS_PER_FRAME_MINUS1 flag in "misc" is no longer set. Some vertical
- * timings have been rotated wrt conventional line-numbering (to ensure a gap
- * between the last active line and nominal end-of-field).
+ * To support 50fps/60fps update in interlaced modes, some vertical timings
+ * have been rotated wrt conventional line-numbering (to leave a gap between
+ * the last active line and nominal end-of-field).
  */
 
 struct rp1vec_hwmode {
@@ -171,7 +170,7 @@ static const struct rp1vec_hwmode rp1vec_hwmodes[3][2] = {
 			.scale_luma = 0x8c9a,
 			.scale_sync = 0x3851,
 			.scale_burst_chroma = 0x11195561,
-			.misc = 0x00094c00, /* 5-tap FIR, SEQ_EN, 2 flds, 4 fld sync */
+			.misc = 0x00094c02, /* 5-tap FIR, SEQ_EN, 2 flds, 4 fld sync, ilace */
 			.nco_freq = 0x087c1f07c1f07c1f,
 			.timing_regs = {
 				0x03e10cc6, 0x0d6801fb, 0x023d034c, 0x00f80b6d,
@@ -220,7 +219,7 @@ static const struct rp1vec_hwmode rp1vec_hwmodes[3][2] = {
 			.scale_luma = 0x89d8,
 			.scale_sync = 0x3c00,
 			.scale_burst_chroma = 0x0caf53b5,
-			.misc = 0x0009dc01, /* 5-tap FIR, SEQ_EN, 4 flds, 8 fld sync, PAL */
+			.misc = 0x0009dc03, /* 5-tap FIR, SEQ_EN, 4 flds, 8 fld sync, ilace, PAL */
 			.nco_freq = 0x0a8262b2cc48c1d1,
 			.timing_regs = {
 				0x04660cee, 0x0d8001fb, 0x025c034f, 0x00fd0b84,
@@ -269,7 +268,7 @@ static const struct rp1vec_hwmode rp1vec_hwmodes[3][2] = {
 			.scale_luma = 0x89d8,
 			.scale_sync = 0x3851,
 			.scale_burst_chroma = 0x0d5c53b5,
-			.misc = 0x0009dc01, /* 5-tap FIR, SEQ_EN, 4 flds, 8 fld sync, PAL */
+			.misc = 0x0009dc03, /* 5-tap FIR, SEQ_EN, 4 flds, 8 fld sync, ilace, PAL */
 			.nco_freq = 0x0879bbf8d6d33ea8,
 			.timing_regs = {
 				0x03e10cc6, 0x0d6801fb, 0x023c034c, 0x00f80b6e,
@@ -298,7 +297,7 @@ static const struct rp1vec_hwmode rp1vec_vintage_modes[2] = {
 		.scale_luma = 0x89d8,
 		.scale_sync = 0x3c00,
 		.scale_burst_chroma = 0,
-		.misc = 0x00084000, /* 5-tap FIR, 2 fields */
+		.misc = 0x00084002, /* 5-tap FIR, 2 fields, interlace */
 		.nco_freq = 0,
 		.timing_regs = {
 			0x06f01430, 0x14d503cc, 0x00000000, 0x000010de,
@@ -321,7 +320,7 @@ static const struct rp1vec_hwmode rp1vec_vintage_modes[2] = {
 		.scale_luma = 0x89d8,
 		.scale_sync = 0x3b13,
 		.scale_burst_chroma = 0,
-		.misc = 0x00084000, /* 5-tap FIR, 2 fields */
+		.misc = 0x00084002, /* 5-tap FIR, 2 fields, interlace */
 		.nco_freq = 0,
 		.timing_regs = {
 			0x03c10a08, 0x0a4d0114, 0x00000000, 0x000008a6,
@@ -368,7 +367,8 @@ static const u32 rp1vec_rate_shift_table[13] = {
 void rp1vec_hw_setup(struct rp1_vec *vec,
 		     u32 in_format,
 		     struct drm_display_mode const *mode,
-		     int tvstd)
+		     int tvstd,
+		     bool fast_update)
 {
 	int i, mode_family, w, h;
 	const struct rp1vec_hwmode *hwm;
@@ -436,7 +436,7 @@ void rp1vec_hw_setup(struct rp1_vec *vec,
 
 	/*
 	 * Configure the hardware "front end" (in the sysclock domain).
-	 * Note: To support 60fps update (per-field buffer flips), we no longer
+	 * Note: In "fast update mode" (for per-field buffer flips), we don't
 	 * enable VEC's native interlaced mode (which can't flip in mid-frame).
 	 * Instead, send individual fields, using software to flip between them.
 	 */
@@ -469,7 +469,9 @@ void rp1vec_hw_setup(struct rp1_vec *vec,
 		  BITS(VEC_MODE_VFP_EN, (vpad_b > 0))				|
 		  BITS(VEC_MODE_VBP_EN, (hwm->max_rows_per_field > h + vpad_b)) |
 		  BITS(VEC_MODE_HFP_EN, (hpad_r > 0))				|
-		  BITS(VEC_MODE_HBP_EN, (wmax > w + hpad_r)));
+		  BITS(VEC_MODE_HBP_EN, (wmax > w + hpad_r))			|
+		  BITS(VEC_MODE_FIELDS_PER_FRAME_MINUS1, hwm->interlaced && !fast_update) |
+		  BITS(VEC_MODE_FIRST_FIELD_ODD, hwm->first_field_odd && !fast_update));
 
 	/* Configure the hardware "back end" (in the VDAC clock domain) */
 	VEC_WRITE(VEC_DAC_80,
@@ -514,12 +516,14 @@ void rp1vec_hw_setup(struct rp1_vec *vec,
 		VEC_WRITE(VEC_DAC_D4, (u32)(hwm->nco_freq));
 		VEC_WRITE(VEC_DAC_D8, (u32)(hwm->nco_freq >> 32));
 	}
+	if (fast_update)
+		misc &= ~VEC_DAC_EC_FIELDS_PER_FRAME_MINUS1_BITS;
 	VEC_WRITE(VEC_DAC_EC, misc | rp1vec_rate_shift_table[rate - 4]);
 	rp1vec_write_regs(vec, 0xDC, rp1vec_fir_regs, ARRAY_SIZE(rp1vec_fir_regs));
 
 	/* State for software-based field flipping */
-	vec->field_flip = hwm->interlaced;
-	vec->lower_field_flag = hwm->first_field_odd;
+	vec->field_flip = hwm->interlaced && fast_update;
+	vec->lower_field_flag = hwm->first_field_odd && fast_update;
 	vec->last_dma_addr = 0;
 
 	/* Set up interrupts and initialise VEC. It will start on the next rp1vec_hw_update() */
@@ -610,8 +614,8 @@ irqreturn_t rp1vec_hw_isr(int irq, void *dev)
 		/*
 		 * VEC has native support for interlaced modes, but that only
 		 * supports buffer-flips per frame (30fps), not field (60fps).
-		 * Instead, we always run the VEC front end in a "progressive"
-		 * mode and use the "field-flip" trick (see RP1 DPI driver).
+		 * When fast update is required, run the VEC front end in a
+		 * "progressive" mode and use this IRQ to swap the fields.
 		 */
 		if ((u & VEC_IRQ_FLAGS_MATCH_BITS) && vec->field_flip) {
 			unsigned long flags;

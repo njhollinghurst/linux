@@ -64,7 +64,8 @@ struct rp1_vec {
 void rp1vec_hw_setup(struct rp1_vec *vec,
 		     u32 in_format,
 		     struct drm_display_mode const *mode,
-		     int tvstd);
+		     int tvstd,
+		     bool fast_update);
 void rp1vec_hw_update(struct rp1_vec *vec, dma_addr_t addr, u32 offset, u32 stride);
 void rp1vec_hw_stop(struct rp1_vec *vec);
 int rp1vec_hw_busy(struct rp1_vec *vec);

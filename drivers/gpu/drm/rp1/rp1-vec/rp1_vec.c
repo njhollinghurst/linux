@@ -49,6 +49,19 @@
 #include "rp1_vec.h"
 
 /*
+ * Parameter to enable per-field update. When this is true (by default),
+ * VEC can do page-flips at any field boundary, but there is no obvious
+ * way to determine which lines of the buffer will be displayed first.
+ * When false, updates are accepted at frame rate only, with conventional
+ * field dominance (top first for all 625-line modes, otherwise bottom).
+ * The parameter is sampled on each mode change.
+ */
+
+static bool rp1vec_fast_update = true;
+module_param_named(fast_update, rp1vec_fast_update, bool, 0600);
+MODULE_PARM_DESC(fast_update, "Enable per-field update in interlaced modes.\n");
+
+/*
  * Linux doesn't make it easy to create custom video modes for the console
  * with non-CVT timings; so add a module parameter for it. The format is:
  * "<pclk>,<hact>,<hfp>,<hsync>,<hbp>,<vact>,<vfp>,<vsync>,<vbp>[,i]"
@@ -119,17 +132,16 @@ static void rp1vec_pipe_update(struct drm_simple_display_pipe *pipe,
 	/* (Re-)start VEC where required; and update FB address */
 	if (can_update) {
 		if (!vec->vec_running || fb->format->format != vec->cur_fmt) {
-			if (vec->vec_running && fb->format->format != vec->cur_fmt) {
+			if (vec->vec_running) {
 				rp1vec_hw_stop(vec);
 				vec->vec_running = false;
 			}
-			if (!vec->vec_running) {
-				rp1vec_hw_setup(vec,
-						fb->format->format,
-						&pipe->crtc.state->mode,
-						vec->connector.state->tv.mode);
-				vec->vec_running = true;
-			}
+			rp1vec_hw_setup(vec,
+					fb->format->format,
+					&pipe->crtc.state->mode,
+					vec->connector.state->tv.mode,
+					rp1vec_fast_update);
+			vec->vec_running = true;
 			vec->cur_fmt  = fb->format->format;
 			drm_crtc_vblank_on(&pipe->crtc);
 		}
