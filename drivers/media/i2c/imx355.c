@@ -19,6 +19,8 @@
 #include <media/v4l2-event.h>
 #include <media/v4l2-fwnode.h>
 
+#define RPI_DOWNSTREAM
+
 #define IMX355_REG_MODE_SELECT		CCI_REG8(0x0100)
 #define IMX355_MODE_STANDBY		0x00
 #define IMX355_MODE_STREAMING		0x01
@@ -145,7 +147,12 @@ static const struct imx355_clk_params imx355_clk_params[] = {
 	{
 		.ext_clk = 24000000,
 		.extclk_freq = 0x1800,
+#ifdef RPI_DOWNSTREAM
+		// Increase 2-lane pixel and MIPI rate by ~8% (to 960Mbit/s)
+		.pll_op_mpy = { 60, 120 },
+#else
 		.pll_op_mpy = { 60, 111 },
+#endif
 		.pll_op_prediv = { 2, 3 }
 	},
 };
@@ -328,6 +335,14 @@ static const struct cci_reg_sequence mode_820x616_regs[] = {
 	{ CCI_REG8(0x0701), 0x78 },
 };
 
+#ifdef RPI_DOWNSTREAM
+// (not sure if we need all these mostly-identical structs)
+static const struct cci_reg_sequence mode_640x480_regs[] = {
+	{ CCI_REG8(0x0700), 0x00 },
+	{ CCI_REG8(0x0701), 0x10 },
+};
+#endif
+
 static const char * const imx355_test_pattern_menu[] = {
 	"Disabled",
 	"Solid Colour",
@@ -354,6 +369,7 @@ static const struct imx355_mode supported_modes[] = {
 			.regs = mode_3280x2464_regs,
 		},
 	},
+#ifndef RPI_DOWNSTREAM
 	{
 		.width = 3268,
 		.height = 2448,
@@ -434,6 +450,7 @@ static const struct imx355_mode supported_modes[] = {
 			.regs = mode_1924x1080_regs,
 		},
 	},
+#endif
 	{
 		.width = 1920,
 		.height = 1080,
@@ -466,6 +483,7 @@ static const struct imx355_mode supported_modes[] = {
 			.regs = mode_1640x1232_regs,
 		},
 	},
+#ifndef RPI_DOWNSTREAM
 	{
 		.width = 1640,
 		.height = 922,
@@ -562,6 +580,24 @@ static const struct imx355_mode supported_modes[] = {
 			.regs = mode_820x616_regs,
 		},
 	},
+#else
+	{
+		.width = 640,
+		.height = 480,
+		.crop = {
+			.width = 1280,
+			.height = 960,
+			.left = 1000,
+			.top = 752,
+		},
+		.fll_def = 520,
+		.llp = 1836,
+		.reg_list = {
+			.num_of_regs = ARRAY_SIZE(mode_640x480_regs),
+			.regs = mode_640x480_regs,
+		},
+	},
+#endif
 };
 
 static inline struct imx355 *to_imx355(struct v4l2_subdev *_sd)
